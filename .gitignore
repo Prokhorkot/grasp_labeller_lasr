@@ -1,5 +1,31 @@
-*.zip
+# Local data and archives
 dataset/*
-.venv
-.codex
-.agents
+*.zip
+
+# Python environments
+.venv/
+.python-version
+
+# Python caches and build artifacts
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+
+# Notebook checkpoints
+.ipynb_checkpoints/
+**/.ipynb_checkpoints/
+
+# Local tool state
+.codex/
+.agents/
+
+# macOS metadata
+.DS_Store
