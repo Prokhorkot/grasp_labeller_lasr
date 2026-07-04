@@ -19,6 +19,7 @@ fonttools==4.63.0
 frozenlist==1.8.0
 fsspec==2025.12.0
 huggingface-hub==0.26.5
+h5py==3.12.1
 idna==3.18
 ipykernel==7.3.0
 ipython==9.15.0

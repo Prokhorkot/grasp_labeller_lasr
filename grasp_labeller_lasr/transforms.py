@@ -12,7 +12,7 @@ class RemoveBackground:
 
     def __call__(
         self,
-        image: np.ndarray | tuple[np.ndarray, np.ndarray],
+        image: np.ndarray,
         background: np.ndarray | None = None,
     ) -> np.ndarray:
         if background is None:
@@ -46,7 +46,7 @@ class Cv2Resize:
 class Identity:
     def __call__(
         self,
-        image: np.ndarray | tuple[np.ndarray, np.ndarray],
+        image: np.ndarray,
         background: np.ndarray | None = None,
     ) -> np.ndarray:
         if background is None and isinstance(image, tuple):

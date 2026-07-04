@@ -8,6 +8,11 @@ from torch.utils.data import random_split
 from torchvision.transforms import v2
 
 from grasp_labeller_lasr.dataset import TactileDataset
+from grasp_labeller_lasr.loaders import (
+    PHASE_DATA_RELATIVE_PATH,
+    DirectoryIterationLoader,
+    H5IterationLoader,
+)
 from grasp_labeller_lasr.transforms import (
     MultiFingerTransform,
     Cv2Resize,
@@ -19,6 +24,8 @@ from grasp_labeller_lasr.transforms import (
 FRAMES_TO_STACK = 16
 DOWNSAMPLING_SIZE = 256
 CROP_SIZE = 224
+FINGER_NAMES = ("thumb", "index", "middle", "ring")
+LABEL_METHOD = "manual"
 
 N_AUG_COPIES = 2
 COL_JITTER_BR = 0.2
@@ -29,13 +36,52 @@ VAL_RATIO = 0.15
 SPLIT_SEED = 42
 
 
-def get_iteration_paths(base_dir: Path) -> list[Path]:
-    return sorted(
-        iteration_path
-        for iteration_path in base_dir.iterdir()
-        if iteration_path.is_dir()
-        and (iteration_path / "grasp/grasp_phases.csv").exists()
+def get_iteration_paths(base_dir: Path) -> tuple[list[dict], type]:
+    data_types = set()
+    samples = []
+
+    def add_data_type(data_type: str) -> None:
+        data_types.add(data_type)
+        if len(data_types) > 1:
+            raise ValueError(
+                f"Mixed iteration formats are not supported: {sorted(data_types)}."
+            )
+
+    for object_dir in sorted(path for path in base_dir.iterdir() if path.is_dir()):
+        iteration_paths = []
+        for iteration_path in sorted(object_dir.iterdir()):
+            if iteration_path.suffix == ".h5":
+                add_data_type("h5")
+                iteration_paths.append(iteration_path)
+            elif (
+                iteration_path.is_dir()
+                and (iteration_path / PHASE_DATA_RELATIVE_PATH).exists()
+            ):
+                add_data_type("directory")
+                iteration_paths.append(iteration_path)
+
+        for iteration_path in iteration_paths:
+            samples.append(
+                {
+                    "object": object_dir.name,
+                    "path": iteration_path,
+                }
+            )
+
+    if not samples:
+        raise ValueError(f"No object-level iterations found in {base_dir}.")
+
+    data_type = next(iter(data_types))
+    loader_cls = H5IterationLoader(
+        frames_to_stack=FRAMES_TO_STACK,
+        finger_names=FINGER_NAMES,
+        label_method=LABEL_METHOD
+    ) if data_type == "h5" else DirectoryIterationLoader(
+        frames_to_stack=FRAMES_TO_STACK,
+        finger_names=FINGER_NAMES,
+        label_method=LABEL_METHOD
     )
+    return samples, loader_cls
 
 
 def main() -> None:
@@ -66,7 +112,7 @@ def main() -> None:
     val_transform = MultiFingerTransform(val_image_transform)
     train_transform = MultiFingerTransform(train_image_transform)
 
-    iteration_paths = get_iteration_paths(dataset_root)
+    iteration_paths, loader = get_iteration_paths(dataset_root)
     train_size = int(len(iteration_paths) * TRAIN_RATIO)
     val_size = int(len(iteration_paths) * VAL_RATIO)
     test_size = len(iteration_paths) - train_size - val_size
@@ -80,23 +126,22 @@ def main() -> None:
     train_dataset = TactileDataset(
         iteration_paths=list(train_paths),
         train_transform=train_transform,
-        val_transform=val_transform,
         n_aug_copies=N_AUG_COPIES,
         include_original=True,
         train=True,
-        frames_to_stack=FRAMES_TO_STACK,
+        loader=loader,
     )
     val_dataset = TactileDataset(
         iteration_paths=list(val_paths),
         val_transform=val_transform,
         train=False,
-        frames_to_stack=FRAMES_TO_STACK,
+        loader=loader,
     )
     test_dataset = TactileDataset(
         iteration_paths=list(test_paths),
         val_transform=val_transform,
         train=False,
-        frames_to_stack=FRAMES_TO_STACK,
+        loader=loader,
     )
 
     sample, label = train_dataset[0]
