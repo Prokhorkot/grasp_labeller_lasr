@@ -7,13 +7,13 @@ import torch
 from torch.utils.data import random_split
 from torchvision.transforms import v2
 
-from grasp_labeller_lasr.dataset import TactileDataset
-from grasp_labeller_lasr.loaders import (
+from grasp_labeller_lasr.data.dataset import TactileDataset
+from grasp_labeller_lasr.data.loaders import (
     PHASE_DATA_RELATIVE_PATH,
     DirectoryIterationLoader,
     H5IterationLoader,
 )
-from grasp_labeller_lasr.transforms import (
+from grasp_labeller_lasr.data.transforms import (
     MultiFingerTransform,
     Cv2Resize,
     RemoveBackground,

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Callable
 
 import cv2
 import numpy as np
+
+from grasp_labeller_lasr.data.loaders import BACKGROUND_KEY, LIFT_END_KEY, LIFT_START_KEY
 
 
 class RemoveBackground:
@@ -56,30 +57,25 @@ class Identity:
 
 
 class MultiFingerTransform:
-    """Apply an image transform to every selected image in a tactile sample."""
+    """Apply an image transform to selected contact phases for each finger."""
 
     def __init__(
         self,
         transform: Callable,
-        image_keys: Iterable[str] | None = None,
-        background_key: str = "background",
+        phase_keys: tuple[str, ...] = (LIFT_START_KEY, LIFT_END_KEY),
+        background_key: str = BACKGROUND_KEY,
     ) -> None:
         self.transform = transform
-        self.image_keys = tuple(image_keys) if image_keys is not None else None
+        self.phase_keys = phase_keys
         self.background_key = background_key
 
     def __call__(self, sample: dict) -> dict:
-        transformed = {
-            finger: {
-                key: image
-                for key, image in images.items()
-            }
-            for finger, images in sample.items()
-        }
+        transformed = {}
         for finger, images in sample.items():
-            for key, image in images.items():
-                if self.image_keys is None or key in self.image_keys:
-                    image = (image, images[self.background_key])
-                    transformed[finger][key] = self.transform(image)
+            background = images[self.background_key]
+            transformed[finger] = {
+                phase_key: self.transform((images[phase_key], background))
+                for phase_key in self.phase_keys
+            }
 
         return transformed

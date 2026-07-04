@@ -67,7 +67,7 @@ safetensors==0.4.5
 six==1.17.0
 stack-data==0.6.3
 sympy==1.14.0
--e git+ssh://org-16943930@github.com/facebookresearch/sparsh.git@fee6a05a97330eca014b59c71ac41596fe3974a7#egg=tactile_ssl
+-e ./external/sparsh
 torch==2.2.2
 torchmetrics==1.9.0
 torchvision==0.17.2

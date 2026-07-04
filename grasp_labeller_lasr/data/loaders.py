@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Sequence
 
 import cv2
+import h5py
 import numpy as np
 import pandas as pd
 
@@ -146,8 +147,6 @@ class H5IterationLoader:
         self.label_method = label_method
 
     def load_iteration(self, iteration_path: str | Path):
-        import h5py
-
         iteration_path = Path(iteration_path)
         with h5py.File(iteration_path, "r") as h5_file:
             phase_data = self._read_phase_data(h5_file, iteration_path)
@@ -200,7 +199,11 @@ class H5IterationLoader:
 
         return sample, label
 
-    def _read_phase_data(self, h5_file, iteration_path: Path) -> pd.DataFrame:
+    def _read_phase_data(
+        self,
+        h5_file: h5py.File,
+        iteration_path: Path,
+    ) -> pd.DataFrame:
         key = str(PHASE_DATA_RELATIVE_PATH)
         if key not in h5_file:
             raise FileNotFoundError(f"{iteration_path}:{key}")
@@ -215,7 +218,7 @@ class H5IterationLoader:
             raise ValueError(f"Missing phase {phase!r} in grasp_phases.csv.")
         return float(phase_times.iloc[0])
 
-    def _read_label(self, h5_file, iteration_path: Path) -> int:
+    def _read_label(self, h5_file: h5py.File, iteration_path: Path) -> int:
         key = str(LABEL_RELATIVE_PATH)
         if key not in h5_file:
             raise FileNotFoundError(f"{iteration_path}:{key}")
@@ -233,7 +236,7 @@ class H5IterationLoader:
 
         return int(selected_labels.iloc[0])
 
-    def _read_table(self, h5_dataset) -> pd.DataFrame:
+    def _read_table(self, h5_dataset: h5py.Dataset) -> pd.DataFrame:
         df = pd.DataFrame.from_records(h5_dataset[()])
         for col in df.columns:
             if df[col].dtype == object:
@@ -246,7 +249,7 @@ class H5IterationLoader:
 
     def _read_encoded_frame(
         self,
-        frames_dataset,
+        frames_dataset: h5py.Dataset,
         frame_idx: int,
         *,
         rgb: bool = True,
@@ -274,7 +277,11 @@ class H5IterationLoader:
                 f"got {len(frame_indices)}."
             )
 
-    def _average_frames(self, frames_ds, frame_indices: Sequence[int]) -> np.ndarray:
+    def _average_frames(
+        self,
+        frames_ds: h5py.Dataset,
+        frame_indices: Sequence[int],
+    ) -> np.ndarray:
         frames = np.stack(
             [
                 self._read_encoded_frame(frames_ds, int(frame_idx))
