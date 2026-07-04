@@ -1,0 +1,3 @@
+[submodule "external/sparsh"]
+	path = external/sparsh
+	url = org-16943930@github.com:facebookresearch/sparsh.git
