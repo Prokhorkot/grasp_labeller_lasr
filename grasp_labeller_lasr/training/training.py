@@ -110,6 +110,7 @@ def main(cfg: DictConfig) -> None:
         lr=cfg.lightning.learning_rate,
         weight_decay=cfg.lightning.weight_decay,
         pos_weight=cfg.lightning.pos_weight,
+        lr_scheduler_cfg=cfg.lightning.lr_scheduler,
     )
 
     checkpoint_callback = ModelCheckpoint(
@@ -123,6 +124,9 @@ def main(cfg: DictConfig) -> None:
         mode=cfg.callbacks.early_stopping.mode,
         patience=cfg.callbacks.early_stopping.patience,
     )
+    callbacks = [checkpoint_callback, early_stopping]
+    if cfg.callbacks.learning_rate_monitor.enabled:
+        callbacks.append(instantiate(cfg.callbacks.learning_rate_monitor.callback))
     logger = None
     if cfg.logger.enabled:
         tracking_uri = cfg.logger.tracking_uri
@@ -145,7 +149,7 @@ def main(cfg: DictConfig) -> None:
         max_epochs=cfg.trainer.max_epochs,
         accelerator=cfg.trainer.accelerator,
         devices=cfg.trainer.devices,
-        callbacks=[checkpoint_callback, early_stopping],
+        callbacks=callbacks,
         log_every_n_steps=cfg.trainer.log_every_n_steps,
         logger=logger,
     )

@@ -1,5 +1,6 @@
 import torch
 import lightning as L
+from hydra.utils import instantiate
 from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryAUROC
 
 
@@ -10,11 +11,13 @@ class GraspLitModule(L.LightningModule):
         lr: float = 1e-4,
         weight_decay: float = 1e-4,
         pos_weight: float | None = None,
+        lr_scheduler_cfg=None,
     ) -> None:
         super().__init__()
         self.model = model
         self.lr = lr
         self.weight_decay = weight_decay
+        self.lr_scheduler_cfg = lr_scheduler_cfg
 
         if pos_weight is not None:
             pos_weight_tensor = torch.tensor([pos_weight])
@@ -83,8 +86,28 @@ class GraspLitModule(L.LightningModule):
         return loss, probs, labels
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(
+        optimizer = torch.optim.AdamW(
             [p for p in self.parameters() if p.requires_grad],
             lr=self.lr,
             weight_decay=self.weight_decay,
         )
+
+        if self.lr_scheduler_cfg is None or not self.lr_scheduler_cfg.enabled:
+            return optimizer
+
+        scheduler = instantiate(
+            self.lr_scheduler_cfg.scheduler,
+            optimizer=optimizer,
+        )
+        lr_scheduler = {
+            "scheduler": scheduler,
+            "interval": self.lr_scheduler_cfg.interval,
+            "frequency": self.lr_scheduler_cfg.frequency,
+        }
+        if getattr(self.lr_scheduler_cfg, "monitor", None) is not None:
+            lr_scheduler["monitor"] = self.lr_scheduler_cfg.monitor
+
+        return {
+            "optimizer": optimizer,
+            "lr_scheduler": lr_scheduler,
+        }

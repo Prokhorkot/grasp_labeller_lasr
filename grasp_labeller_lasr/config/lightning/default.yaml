@@ -1,4 +1,11 @@
-learning_rate: 0.0001
+learning_rate: 0.00001
 weight_decay: 0.0001
 pos_weight: null
-
+lr_scheduler:
+  enabled: true
+  scheduler:
+    _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+    T_max: ${trainer.max_epochs}
+    eta_min: 0.000001
+  interval: epoch
+  frequency: 1

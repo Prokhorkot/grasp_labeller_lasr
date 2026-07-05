@@ -7,3 +7,9 @@ early_stopping:
   monitor: val_loss
   mode: min
   patience: 10
+learning_rate_monitor:
+  enabled: true
+  callback:
+    _target_: lightning.pytorch.callbacks.LearningRateMonitor
+    logging_interval: epoch
+    log_momentum: false
