@@ -1,0 +1,31 @@
+enabled: true
+experiment_name: grasp_labeller_lasr
+run_name: null
+run_name_tags:
+  - model
+  - pooling
+  - head
+  - learning_rate
+  - batch_size
+tracking_uri: https://dagshub.com/Prokhorkot/grasp_labeller_lasr.mlflow
+log_model: true
+prefix: ""
+tags:
+  task: binary-grasp-classification
+  model: ${model.name}
+  encoder: ${model.encoder_name}
+  encoder_checkpoint: ${model.encoder_path}
+  encoder_trainable: false
+  head: ${head.name}
+  pooling: ${head.pooling_name}
+  num_inputs: ${head.num_inputs}
+  embedding_dim: ${head.embedding_dim}
+  hidden_dim: ${head.hidden_dim}
+  dropout: ${head.dropout}
+  learning_rate: ${lightning.learning_rate}
+  weight_decay: ${lightning.weight_decay}
+  batch_size: ${data.batch_size}
+  crop_size: ${data.crop_size}
+  remove_background: ${data.remove_background}
+  n_aug_copies: ${data.n_aug_copies}
+  split_seed: ${data.split_seed}

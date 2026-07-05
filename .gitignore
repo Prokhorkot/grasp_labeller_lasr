@@ -1,5 +1,6 @@
 # Local data and archives
 dataset/*
+dataset.bak/*
 *.zip
 
 # Python environments
@@ -29,3 +30,13 @@ dist/
 
 # macOS metadata
 .DS_Store
+
+# Logs and outputs
+*.log
+outputs/
+
+# Models
+*.ckpt
+
+# Envs
+.env

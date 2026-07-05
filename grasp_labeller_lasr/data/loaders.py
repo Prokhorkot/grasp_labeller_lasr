@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 import cv2
@@ -155,8 +155,14 @@ class H5IterationLoader:
 
             sample = {}
             for finger in self.finger_names:
-                camera_meta_key = CAMERA_META_RELATIVE_TEMPLATE.format(finger=finger)
-                frames_key = FRAMES_RELATIVE_TEMPLATE.format(finger=finger)
+                camera_meta_key = self._h5_key(
+                    iteration_path,
+                    CAMERA_META_RELATIVE_TEMPLATE.format(finger=finger),
+                )
+                frames_key = self._h5_key(
+                    iteration_path,
+                    FRAMES_RELATIVE_TEMPLATE.format(finger=finger),
+                )
                 if camera_meta_key not in h5_file or frames_key not in h5_file:
                     raise FileNotFoundError(
                         f"Missing camera data for finger {finger!r} in "
@@ -204,7 +210,7 @@ class H5IterationLoader:
         h5_file: h5py.File,
         iteration_path: Path,
     ) -> pd.DataFrame:
-        key = str(PHASE_DATA_RELATIVE_PATH)
+        key = self._h5_key(iteration_path, PHASE_DATA_RELATIVE_PATH)
         if key not in h5_file:
             raise FileNotFoundError(f"{iteration_path}:{key}")
         return self._read_table(h5_file[key])
@@ -219,7 +225,7 @@ class H5IterationLoader:
         return float(phase_times.iloc[0])
 
     def _read_label(self, h5_file: h5py.File, iteration_path: Path) -> int:
-        key = str(LABEL_RELATIVE_PATH)
+        key = self._h5_key(iteration_path, LABEL_RELATIVE_PATH)
         if key not in h5_file:
             raise FileNotFoundError(f"{iteration_path}:{key}")
 
@@ -235,6 +241,9 @@ class H5IterationLoader:
             )
 
         return int(selected_labels.iloc[0])
+
+    def _h5_key(self, iteration_path: Path, relative_path: str | Path) -> str:
+        return str(PurePosixPath(iteration_path.stem) / PurePosixPath(str(relative_path)))
 
     def _read_table(self, h5_dataset: h5py.Dataset) -> pd.DataFrame:
         df = pd.DataFrame.from_records(h5_dataset[()])

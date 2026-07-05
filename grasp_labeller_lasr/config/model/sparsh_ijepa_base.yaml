@@ -1,0 +1,7 @@
+name: sparsh_ijepa_base
+encoder_name: facebook/sparsh-ijepa-base
+encoder_path: ijepa_vitbase.ckpt
+device: cuda
+image_size:
+  - ${data.crop_size}
+  - ${data.crop_size}

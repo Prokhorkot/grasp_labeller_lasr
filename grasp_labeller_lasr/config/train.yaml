@@ -1,0 +1,9 @@
+defaults:
+  - data: lasr
+  - model: sparsh_ijepa_base
+  - head: mlp
+  - lightning: default
+  - trainer: default
+  - callbacks: default
+  - logger: mlflow
+  - _self_
