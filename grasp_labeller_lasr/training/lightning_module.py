@@ -1,6 +1,12 @@
-import torch
 import lightning as L
-from torchmetrics.classification import BinaryAccuracy, BinaryF1Score, BinaryAUROC
+import torch
+from torchmetrics.classification import (
+    BinaryAUROC,
+    BinaryAccuracy,
+    BinaryF1Score,
+    BinaryPrecision,
+    BinaryRecall,
+)
 
 
 class GraspLitModule(L.LightningModule):
@@ -24,8 +30,16 @@ class GraspLitModule(L.LightningModule):
         self.loss_fn = torch.nn.BCEWithLogitsLoss(pos_weight=pos_weight_tensor)
 
         self.train_acc = BinaryAccuracy()
+        self.train_precision = BinaryPrecision()
+        self.train_recall = BinaryRecall()
+
         self.val_acc = BinaryAccuracy()
+        self.val_precision = BinaryPrecision()
+        self.val_recall = BinaryRecall()
+
         self.test_acc = BinaryAccuracy()
+        self.test_precision = BinaryPrecision()
+        self.test_recall = BinaryRecall()
 
         self.val_f1 = BinaryF1Score()
         self.test_f1 = BinaryF1Score()
@@ -40,8 +54,12 @@ class GraspLitModule(L.LightningModule):
         loss, probs, labels = self._shared_step(batch)
 
         self.train_acc(probs, labels.int())
+        self.train_precision(probs, labels.int())
+        self.train_recall(probs, labels.int())
         self.log("train/loss", loss, prog_bar=True)
         self.log("train/acc", self.train_acc, prog_bar=True)
+        self.log("train/precision", self.train_precision)
+        self.log("train/recall", self.train_recall)
 
         return loss
 
@@ -50,11 +68,15 @@ class GraspLitModule(L.LightningModule):
 
         labels_int = labels.int()
         self.val_acc(probs, labels_int)
+        self.val_precision(probs, labels_int)
+        self.val_recall(probs, labels_int)
         self.val_f1(probs, labels_int)
         self.val_auroc(probs, labels_int)
 
         self.log("val/loss", loss, prog_bar=True)
         self.log("val/acc", self.val_acc, prog_bar=True)
+        self.log("val/precision", self.val_precision, prog_bar=True)
+        self.log("val/recall", self.val_recall, prog_bar=True)
         self.log("val/f1", self.val_f1, prog_bar=True)
         self.log("val/auroc", self.val_auroc, prog_bar=True)
 
@@ -63,11 +85,15 @@ class GraspLitModule(L.LightningModule):
 
         labels_int = labels.int()
         self.test_acc(probs, labels_int)
+        self.test_precision(probs, labels_int)
+        self.test_recall(probs, labels_int)
         self.test_f1(probs, labels_int)
         self.test_auroc(probs, labels_int)
 
         self.log("test/loss", loss)
         self.log("test/acc", self.test_acc)
+        self.log("test/precision", self.test_precision)
+        self.log("test/recall", self.test_recall)
         self.log("test/f1", self.test_f1)
         self.log("test/auroc", self.test_auroc)
 

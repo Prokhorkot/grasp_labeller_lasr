@@ -12,6 +12,7 @@ from torchvision.transforms import v2
 from grasp_labeller_lasr.data.dataset import TactileDataset
 from grasp_labeller_lasr.data.loaders import (
     PHASE_DATA_RELATIVE_PATH,
+    CachedIterationLoader,
     DirectoryIterationLoader,
     H5IterationLoader,
 )
@@ -41,6 +42,8 @@ class GraspDataModule(L.LightningDataModule):
         split_seed: int,
         batch_size: int,
         num_workers: int,
+        cache_enabled: bool = False,
+        cache_dir: str | Path = ".cache/grasp_iterations",
     ) -> None:
         super().__init__()
 
@@ -59,6 +62,8 @@ class GraspDataModule(L.LightningDataModule):
         self.split_seed = split_seed
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.cache_enabled = cache_enabled
+        self.cache_dir = Path(cache_dir)
 
         self.train_dataset: TactileDataset | None = None
         self.val_dataset: TactileDataset | None = None
@@ -149,6 +154,17 @@ class GraspDataModule(L.LightningDataModule):
     def _get_iteration_paths(self) -> tuple[list[dict], Any]:
         data_types = set()
         samples = []
+        cache_dir = self.cache_dir
+        if not cache_dir.is_absolute():
+            cache_dir = self.dataset_root / cache_dir
+        try:
+            cache_root = (
+                cache_dir.resolve()
+                .relative_to(self.dataset_root.resolve())
+                .parts[0]
+            )
+        except ValueError:
+            cache_root = None
 
         def add_data_type(data_type: str) -> None:
             data_types.add(data_type)
@@ -159,7 +175,10 @@ class GraspDataModule(L.LightningDataModule):
                 )
 
         for object_dir in sorted(
-            path for path in self.dataset_root.iterdir() if path.is_dir()
+            path
+            for path in self.dataset_root.iterdir()
+            if path.is_dir()
+            and path.name != cache_root
         ):
             iteration_paths = []
             for iteration_path in sorted(object_dir.iterdir()):
@@ -198,6 +217,11 @@ class GraspDataModule(L.LightningDataModule):
                 label_method=self.label_method,
             )
         )
+        if self.cache_enabled:
+            cache_dir = self.cache_dir
+            if not cache_dir.is_absolute():
+                cache_dir = self.dataset_root / cache_dir
+            loader = CachedIterationLoader(loader, cache_dir=cache_dir)
         return samples, loader
 
     def _split_sizes(self, num_items: int) -> tuple[int, int, int]:

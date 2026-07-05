@@ -78,6 +78,8 @@ def main(cfg: DictConfig) -> None:
         split_seed=cfg.data.split_seed,
         batch_size=cfg.data.batch_size,
         num_workers=cfg.data.num_workers,
+        cache_enabled=cfg.data.cache_enabled,
+        cache_dir=cfg.data.cache_dir,
     )
 
     patch_pooling = get_method(cfg.head.patch_pooling)

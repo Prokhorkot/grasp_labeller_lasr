@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import hashlib
+import os
 from pathlib import Path, PurePosixPath
+import tempfile
 from typing import Sequence
 
 import cv2
 import h5py
 import numpy as np
 import pandas as pd
+import torch
 
 
 DEFAULT_FINGER_NAMES = ("thumb", "index", "middle", "ring")
@@ -20,6 +24,69 @@ LIFT_PHASE = "lift"
 BACKGROUND_KEY = "background"
 LIFT_START_KEY = "lift_start"
 LIFT_END_KEY = "lift_end"
+
+
+class CachedIterationLoader:
+    """Cache loaded iteration samples while preserving the loader interface."""
+
+    CACHE_VERSION = 1
+
+    def __init__(self, loader, cache_dir: str | Path) -> None:
+        self.loader = loader
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(parents=True, exist_ok=True)
+
+    def load_iteration(self, iteration_path: str | Path):
+        iteration_path = Path(iteration_path)
+        cache_path = self._cache_path(iteration_path)
+        if cache_path.exists():
+            cached = self._load_cache(cache_path)
+            return cached["sample"], cached["label"]
+
+        sample, label = self.loader.load_iteration(iteration_path)
+        self._save_cache(cache_path, {"sample": sample, "label": label})
+        return sample, label
+
+    def _cache_path(self, iteration_path: Path) -> Path:
+        return self.cache_dir / f"{self._cache_key(iteration_path)}.pt"
+
+    def _cache_key(self, iteration_path: Path) -> str:
+        stat = iteration_path.stat()
+        payload = "|".join(
+            [
+                f"v={self.CACHE_VERSION}",
+                f"loader={type(self.loader).__name__}",
+                f"path={iteration_path.resolve()}",
+                f"mtime_ns={stat.st_mtime_ns}",
+                f"size={stat.st_size}",
+                f"frames_to_stack={getattr(self.loader, 'frames_to_stack', None)}",
+                f"finger_names={getattr(self.loader, 'finger_names', None)}",
+                f"label_method={getattr(self.loader, 'label_method', None)}",
+            ]
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    @staticmethod
+    def _load_cache(cache_path: Path) -> dict:
+        try:
+            return torch.load(cache_path, weights_only=False)
+        except TypeError:
+            return torch.load(cache_path)
+
+    def _save_cache(self, cache_path: Path, payload: dict) -> None:
+        fd, temp_path = tempfile.mkstemp(
+            prefix=f".{cache_path.stem}.",
+            suffix=".tmp",
+            dir=self.cache_dir,
+        )
+        os.close(fd)
+        temp_cache_path = Path(temp_path)
+        try:
+            torch.save(payload, temp_cache_path)
+            os.replace(temp_cache_path, cache_path)
+        finally:
+            if temp_cache_path.exists():
+                temp_cache_path.unlink()
 
 
 class DirectoryIterationLoader:
