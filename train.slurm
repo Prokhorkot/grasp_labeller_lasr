@@ -7,7 +7,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --mem=64G
 #SBATCH --time=12:00:00
-#SBATCH --output=slurm-%x-%j.out
+#SBATCH --output=logs/slurm-%x-%j.out
 
 set -euo pipefail
 
