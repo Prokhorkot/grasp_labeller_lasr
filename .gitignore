@@ -33,6 +33,7 @@ dist/
 
 # Logs and outputs
 *.log
+slurm-*.out
 outputs/
 
 # Models
