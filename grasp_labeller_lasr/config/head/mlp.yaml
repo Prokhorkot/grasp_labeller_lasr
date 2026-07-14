@@ -1,9 +1,4 @@
 name: mlp
-num_inputs: 4
-embedding_dim: 768
 hidden_dim: 512
 dropout: 0.2
 output_dim: 1
-pooling_name: mean
-patch_pooling: grasp_labeller_lasr.models.heads.mean_patch_pooling
-patch_pooler: null

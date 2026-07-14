@@ -2,7 +2,7 @@ enabled: true
 experiment_name: grasp_labeller_lasr
 run_name: null
 run_name_tags:
-  - model
+  - encoder
   - pooling
   - head
   - learning_rate
@@ -12,14 +12,12 @@ log_model: true
 prefix: ""
 tags:
   task: binary-grasp-classification
-  model: ${model.name}
-  encoder: ${model.encoder_name}
-  encoder_checkpoint: ${model.encoder_path}
+  encoder: ${encoder.name}
+  encoder_name: ${encoder.encoder_name}
+  encoder_checkpoint: ${encoder.encoder_path}
   encoder_trainable: false
   head: ${head.name}
-  pooling: ${head.pooling_name}
-  num_inputs: ${head.num_inputs}
-  embedding_dim: ${head.embedding_dim}
+  pooling: ${encoder.pooling_name}
   hidden_dim: ${head.hidden_dim}
   dropout: ${head.dropout}
   learning_rate: ${lightning.learning_rate}

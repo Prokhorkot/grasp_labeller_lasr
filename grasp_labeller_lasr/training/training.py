@@ -11,8 +11,9 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
+from grasp_labeller_lasr.models.encoders import SparshEncoder
+from grasp_labeller_lasr.models.grasp_classifier import GraspClassifier
 from grasp_labeller_lasr.models.heads import MLPClassifierHead
-from grasp_labeller_lasr.models.sparsh_classifier import SparshGraspClassifier
 from grasp_labeller_lasr.training.datamodule import GraspDataModule
 from grasp_labeller_lasr.training.lightning_module import GraspLitModule
 
@@ -82,30 +83,32 @@ def main(cfg: DictConfig) -> None:
         cache_dir=cfg.data.cache_dir,
     )
 
-    patch_pooling = get_method(cfg.head.patch_pooling)
+    patch_pooling = get_method(cfg.encoder.patch_pooling)
     patch_pooler = (
-        instantiate(cfg.head.patch_pooler)
-        if cfg.head.patch_pooler is not None
+        instantiate(cfg.encoder.patch_pooler)
+        if cfg.encoder.patch_pooler is not None
         else None
     )
-    head = MLPClassifierHead(
-        num_inputs=cfg.head.num_inputs,
-        embedding_dim=cfg.head.embedding_dim,
-        hidden_dim=cfg.head.hidden_dim,
-        dropout=cfg.head.dropout,
-        output_dim=cfg.head.output_dim,
+    encoder = SparshEncoder(
+        encoder_name=cfg.encoder.encoder_name,
+        encoder_path=cfg.encoder.encoder_path,
+        device=cfg.encoder.device,
+        image_size=tuple(cfg.encoder.image_size),
+        finger_names=tuple(cfg.data.finger_names),
         patch_pooling=patch_pooling,
         patch_pooler=patch_pooler,
     )
-
-    model = SparshGraspClassifier(
-        encoder_name=cfg.model.encoder_name,
-        encoder_path=cfg.model.encoder_path,
-        device=cfg.model.device,
-        head=head,
-        image_size=tuple(cfg.model.image_size),
-        finger_names=tuple(cfg.data.finger_names),
+    head_input_dim = (
+        len(cfg.data.finger_names) * encoder.embedding_dim
+        + datamodule.proprioception_dim
     )
+    head = MLPClassifierHead(
+        input_dim=head_input_dim,
+        hidden_dim=cfg.head.hidden_dim,
+        dropout=cfg.head.dropout,
+        output_dim=cfg.head.output_dim,
+    )
+    model = GraspClassifier(encoder=encoder, head=head).to(cfg.encoder.device)
 
     lit_model = GraspLitModule(
         model=model,
@@ -135,6 +138,10 @@ def main(cfg: DictConfig) -> None:
         if tracking_uri == "null":
             tracking_uri = None
         tags = _build_mlflow_tags(cfg)
+        tags["embedding_dim"] = str(encoder.embedding_dim)
+        tags["num_inputs"] = str(len(cfg.data.finger_names))
+        tags["proprioception_dim"] = str(datamodule.proprioception_dim)
+        tags["head_input_dim"] = str(head_input_dim)
         run_name = _build_run_name(cfg, tags)
 
         logger = MLFlowLogger(

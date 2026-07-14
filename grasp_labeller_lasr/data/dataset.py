@@ -5,18 +5,28 @@ from typing import Callable, Mapping, Sequence
 from torch.utils.data import Dataset
 
 
+IMAGES_KEY = "images"
+PROPRIOCEPTORS_KEY = "proprioceptors"
+
+
 class TactileDataset(Dataset):
     """Dataset for one grasp iteration per item.
 
     Each returned sample is a nested dictionary:
 
     {
-        "thumb": {
-            "background": image,
-            "lift_start": image,
-            "lift_end": image,
+        "images": {
+            "thumb": {
+                "background": image,
+                "lift_start": image,
+                "lift_end": image,
+            },
+            ...
         },
-        ...
+        "proprioceptors": {
+            "commanded": action,
+            "observed": pose,
+        },
     }
 
     Images are RGB HWC numpy arrays before transforms. The label is loaded from
@@ -69,7 +79,7 @@ class TactileDataset(Dataset):
         sample, label = self.loader.load_iteration(iteration_path)
         transform = self._select_transform(copy_index)
         if transform is not None:
-            sample = transform(sample)
+            sample[IMAGES_KEY] = transform(sample[IMAGES_KEY])
 
         return sample, label
 

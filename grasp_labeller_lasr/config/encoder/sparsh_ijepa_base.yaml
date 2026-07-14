@@ -5,3 +5,6 @@ device: cuda
 image_size:
   - ${data.crop_size}
   - ${data.crop_size}
+pooling_name: mean
+patch_pooling: grasp_labeller_lasr.models.encoders.mean_patch_pooling
+patch_pooler: null

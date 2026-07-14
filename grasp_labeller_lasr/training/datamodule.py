@@ -12,6 +12,7 @@ from torchvision.transforms import v2
 from grasp_labeller_lasr.data.dataset import TactileDataset
 from grasp_labeller_lasr.data.loaders import (
     PHASE_DATA_RELATIVE_PATH,
+    PROPRIOCEPTION_DIM,
     CachedIterationLoader,
     DirectoryIterationLoader,
     H5IterationLoader,
@@ -53,6 +54,7 @@ class GraspDataModule(L.LightningDataModule):
         self.crop_size = crop_size
         self.finger_names = finger_names
         self.label_method = label_method
+        self.proprioception_dim = PROPRIOCEPTION_DIM
         self.n_aug_copies = n_aug_copies
         self.include_original = include_original
         self.color_jitter_brightness = color_jitter_brightness
@@ -67,7 +69,6 @@ class GraspDataModule(L.LightningDataModule):
 
         self.train_dataset: TactileDataset | None = None
         self.val_dataset: TactileDataset | None = None
-        self.test_dataset: TactileDataset | None = None
 
     def setup(self, stage: str | None = None) -> None:
         if self.train_dataset is not None:
@@ -75,12 +76,25 @@ class GraspDataModule(L.LightningDataModule):
 
         train_transform, val_transform = self._build_transforms()
         iteration_paths, loader = self._get_iteration_paths()
-        train_size, val_size, test_size = self._split_sizes(len(iteration_paths))
-        train_paths, val_paths, test_paths = random_split(
-            iteration_paths,
-            [train_size, val_size, test_size],
+        object_names = sorted({sample["object"] for sample in iteration_paths})
+        train_size, val_size = self._split_sizes(len(object_names))
+        train_objects, val_objects = random_split(
+            object_names,
+            [train_size, val_size],
             generator=torch.Generator().manual_seed(self.split_seed),
         )
+        train_object_names = set(train_objects)
+        val_object_names = set(val_objects)
+        train_paths = [
+            sample
+            for sample in iteration_paths
+            if sample["object"] in train_object_names
+        ]
+        val_paths = [
+            sample
+            for sample in iteration_paths
+            if sample["object"] in val_object_names
+        ]
 
         self.train_dataset = TactileDataset(
             iteration_paths=list(train_paths),
@@ -97,12 +111,6 @@ class GraspDataModule(L.LightningDataModule):
             train=False,
             loader=loader,
         )
-        self.test_dataset = TactileDataset(
-            iteration_paths=list(test_paths),
-            val_transform=val_transform,
-            train=False,
-            loader=loader,
-        )
 
     def train_dataloader(self) -> DataLoader:
         if self.train_dataset is None:
@@ -113,11 +121,6 @@ class GraspDataModule(L.LightningDataModule):
         if self.val_dataset is None:
             raise RuntimeError("Call setup() before requesting val_dataloader().")
         return self._dataloader(self.val_dataset)
-
-    def test_dataloader(self) -> DataLoader:
-        if self.test_dataset is None:
-            raise RuntimeError("Call setup() before requesting test_dataloader().")
-        return self._dataloader(self.test_dataset)
 
     def _build_transforms(self) -> tuple[MultiFingerTransform, MultiFingerTransform]:
         val_image_transform = v2.Compose(
@@ -224,11 +227,18 @@ class GraspDataModule(L.LightningDataModule):
             loader = CachedIterationLoader(loader, cache_dir=cache_dir)
         return samples, loader
 
-    def _split_sizes(self, num_items: int) -> tuple[int, int, int]:
-        train_size = int(num_items * self.train_ratio)
-        val_size = int(num_items * self.val_ratio)
-        test_size = num_items - train_size - val_size
-        return train_size, val_size, test_size
+    def _split_sizes(self, num_objects: int) -> tuple[int, int]:
+        if num_objects < 2:
+            raise ValueError("At least two objects are required for train/val splits.")
+        if self.train_ratio <= 0 or self.val_ratio <= 0:
+            raise ValueError("train_ratio and val_ratio must both be positive.")
+        if abs(self.train_ratio + self.val_ratio - 1.0) > 1e-8:
+            raise ValueError("train_ratio and val_ratio must sum to 1.")
+
+        train_size = int(num_objects * self.train_ratio)
+        train_size = min(max(train_size, 1), num_objects - 1)
+        val_size = num_objects - train_size
+        return train_size, val_size
 
     def _dataloader(self, dataset: TactileDataset, shuffle: bool = False) -> DataLoader:
         return DataLoader(

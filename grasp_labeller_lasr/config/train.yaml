@@ -1,6 +1,6 @@
 defaults:
   - data: lasr
-  - model: sparsh_ijepa_base
+  - encoder: sparsh_ijepa_base
   - head: mlp
   - lightning: default
   - trainer: default

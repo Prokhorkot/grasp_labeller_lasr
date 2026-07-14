@@ -19,6 +19,11 @@ LABEL_RELATIVE_PATH = Path("grasp/grasp_label.csv")
 CAMERA_META_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/camera/camera.csv"
 FRAMES_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/camera/frames"
 
+PROPRIOCEPTORS_ACTIONS = Path("tilburg/tilburg_action.csv")
+PROPRIOCEPTORS_POSES = Path("tilburg/tilburg_pos.csv")
+PROPRIOCEPTION_DIM = 16
+N_POSES_TO_AVERAGE = 3
+
 LIFT_PHASE = "lift"
 
 BACKGROUND_KEY = "background"
@@ -26,10 +31,47 @@ LIFT_START_KEY = "lift_start"
 LIFT_END_KEY = "lift_end"
 
 
+def _summarize_proprioceptors(
+    actions: pd.DataFrame,
+    poses: pd.DataFrame,
+    proprio_window: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    if actions.empty:
+        raise ValueError("The proprioceptor action table is empty.")
+    if poses.empty:
+        raise ValueError("The proprioceptor pose table is empty.")
+    if actions.shape[1] != PROPRIOCEPTION_DIM:
+        raise ValueError(
+            f"Expected {PROPRIOCEPTION_DIM} commanded proprioceptor values, "
+            f"got {actions.shape[1]}."
+        )
+    if poses.shape[1] != PROPRIOCEPTION_DIM:
+        raise ValueError(
+            f"Expected {PROPRIOCEPTION_DIM} observed proprioceptor values, "
+            f"got {poses.shape[1]}."
+        )
+
+    action = actions.iloc[-1].to_numpy()
+    last_perf_time = poses.index[-1]
+    poses_to_average = []
+
+    for i in range(N_POSES_TO_AVERAGE):
+        target_time = last_perf_time - i * proprio_window
+        idx = poses.index.searchsorted(target_time, side="right") - 1
+        if idx < 0:
+            raise ValueError(
+                f"No pose is available at or before perf_time={target_time}."
+            )
+        poses_to_average.append(poses.iloc[idx].to_numpy())
+
+    observed_pose = np.median(np.asarray(poses_to_average), axis=0)
+    return action, observed_pose
+
+
 class CachedIterationLoader:
     """Cache loaded iteration samples while preserving the loader interface."""
 
-    CACHE_VERSION = 1
+    CACHE_VERSION = 2
 
     def __init__(self, loader, cache_dir: str | Path) -> None:
         self.loader = loader
@@ -62,6 +104,7 @@ class CachedIterationLoader:
                 f"frames_to_stack={getattr(self.loader, 'frames_to_stack', None)}",
                 f"finger_names={getattr(self.loader, 'finger_names', None)}",
                 f"label_method={getattr(self.loader, 'label_method', None)}",
+                f"proprio_window={getattr(self.loader, 'proprio_window', None)}",
             ]
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -95,10 +138,12 @@ class DirectoryIterationLoader:
         frames_to_stack: int = 16,
         finger_names: Sequence[str] = DEFAULT_FINGER_NAMES,
         label_method: str = "manual",
+        proprio_window: float = 0.020,
     ) -> None:
         self.frames_to_stack = frames_to_stack
         self.finger_names = tuple(finger_names)
         self.label_method = label_method
+        self.proprio_window = proprio_window
 
     def load_iteration(self, iteration_path: str | Path):
         iteration_path = Path(iteration_path)
@@ -106,7 +151,7 @@ class DirectoryIterationLoader:
         lift_start_time = self._get_phase_time(phase_data, phase=LIFT_PHASE)
         label = self._read_label(iteration_path)
 
-        sample = {}
+        sample = {"images": {}, "proprioceptors": {}}
         for finger in self.finger_names:
             camera_meta_path = iteration_path / CAMERA_META_RELATIVE_TEMPLATE.format(
                 finger=finger
@@ -137,13 +182,32 @@ class DirectoryIterationLoader:
                 context=f"{iteration_path.name}/{finger} lift_end",
             )
 
-            sample[finger] = {
+            sample["images"][finger] = {
                 BACKGROUND_KEY: self._load_rgb_frame(first_frame_path),
                 LIFT_START_KEY: self._average_frames(lift_start_paths),
                 LIFT_END_KEY: self._average_frames(lift_end_paths),
             }
 
+        action, observed_pose = self.read_proprioceptors(iteration_path)
+        sample["proprioceptors"] = {"commanded": action, "observed": observed_pose}
+
         return sample, label
+
+    def read_proprioceptors(self, iteration_path: Path):
+        actions = pd.read_csv(
+            iteration_path / PROPRIOCEPTORS_ACTIONS,
+            index_col="perf_time",
+        ).sort_index()
+        poses = pd.read_csv(
+            iteration_path / PROPRIOCEPTORS_POSES,
+            index_col="perf_time",
+        ).sort_index()
+
+        return _summarize_proprioceptors(
+            actions,
+            poses,
+            self.proprio_window,
+        )
 
     def _read_phase_data(self, iteration_path: Path) -> pd.DataFrame:
         phase_data_path = iteration_path / PHASE_DATA_RELATIVE_PATH
@@ -208,10 +272,12 @@ class H5IterationLoader:
         frames_to_stack: int = 16,
         finger_names: Sequence[str] = DEFAULT_FINGER_NAMES,
         label_method: str = "manual",
+        proprio_window: float = 0.020,
     ) -> None:
         self.frames_to_stack = frames_to_stack
         self.finger_names = tuple(finger_names)
         self.label_method = label_method
+        self.proprio_window = proprio_window
 
     def load_iteration(self, iteration_path: str | Path):
         iteration_path = Path(iteration_path)
@@ -220,7 +286,7 @@ class H5IterationLoader:
             lift_start_time = self._get_phase_time(phase_data, phase=LIFT_PHASE)
             label = self._read_label(h5_file, iteration_path)
 
-            sample = {}
+            sample = {"images": {}, "proprioceptors": {}}
             for finger in self.finger_names:
                 camera_meta_key = self._h5_key(
                     iteration_path,
@@ -255,7 +321,7 @@ class H5IterationLoader:
                 )
 
                 frames_ds = h5_file[frames_key]
-                sample[finger] = {
+                sample["images"][finger] = {
                     BACKGROUND_KEY: self._read_encoded_frame(
                         frames_ds,
                         first_frame_idx,
@@ -270,7 +336,52 @@ class H5IterationLoader:
                     ),
                 }
 
+            action, observed_pose = self.read_proprioceptors(
+                h5_file,
+                iteration_path,
+            )
+            sample["proprioceptors"] = {
+                "commanded": action,
+                "observed": observed_pose,
+            }
+
         return sample, label
+
+    def read_proprioceptors(
+        self,
+        h5_file: h5py.File,
+        iteration_path: Path,
+    ) -> tuple[np.ndarray, np.ndarray]:
+        actions = self._read_indexed_table(
+            h5_file,
+            iteration_path,
+            PROPRIOCEPTORS_ACTIONS,
+        )
+        poses = self._read_indexed_table(
+            h5_file,
+            iteration_path,
+            PROPRIOCEPTORS_POSES,
+        )
+        return _summarize_proprioceptors(
+            actions,
+            poses,
+            self.proprio_window,
+        )
+
+    def _read_indexed_table(
+        self,
+        h5_file: h5py.File,
+        iteration_path: Path,
+        relative_path: str | Path,
+    ) -> pd.DataFrame:
+        key = self._h5_key(iteration_path, relative_path)
+        if key not in h5_file:
+            raise FileNotFoundError(f"{iteration_path}:{key}")
+
+        table = self._read_table(h5_file[key])
+        if "perf_time" not in table.columns:
+            raise ValueError(f"Missing 'perf_time' column in {iteration_path}:{key}.")
+        return table.set_index("perf_time").sort_index()
 
     def _read_phase_data(
         self,

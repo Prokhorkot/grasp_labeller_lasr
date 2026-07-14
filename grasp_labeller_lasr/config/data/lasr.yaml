@@ -13,7 +13,7 @@ include_original: true
 color_jitter_brightness: 0.2
 remove_background: false
 train_ratio: 0.7
-val_ratio: 0.2
+val_ratio: 0.3
 split_seed: 42
 batch_size: 32
 num_workers: 8
