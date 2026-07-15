@@ -4,9 +4,9 @@ checkpoint:
   save_top_k: 1
   filename: "best-{epoch:02d}"
 early_stopping:
-  monitor: val/loss
-  mode: min
-  patience: 10
+  monitor: val/acc
+  mode: max
+  patience: 20
 learning_rate_monitor:
   enabled: true
   callback:
