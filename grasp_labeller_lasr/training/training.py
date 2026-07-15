@@ -100,7 +100,7 @@ def main(cfg: DictConfig) -> None:
     )
     head_input_dim = (
         len(cfg.data.finger_names) * encoder.embedding_dim
-        + datamodule.proprioception_dim
+        + 2 * datamodule.proprioception_dim
     )
     head = MLPClassifierHead(
         input_dim=head_input_dim,

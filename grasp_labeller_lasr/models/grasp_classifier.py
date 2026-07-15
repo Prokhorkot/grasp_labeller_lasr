@@ -46,6 +46,8 @@ class GraspClassifier(torch.nn.Module):
             raise ValueError(
                 "Image and proprioceptor features must have the same batch size."
             )
+        
+        proprio_observed = proprio_observed.flatten(start_dim=1)
 
-        features = torch.cat([image_features, proprio_difference], dim=1)
+        features = torch.cat([image_features, proprio_observed, proprio_difference], dim=1)
         return self.head(features)
