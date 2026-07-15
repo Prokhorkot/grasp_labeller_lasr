@@ -59,10 +59,12 @@ class GraspLitModule(L.LightningModule):
         self.train_acc(probs, labels.int())
         self.train_precision(probs, labels.int())
         self.train_recall(probs, labels.int())
-        self.log("train/loss", loss, prog_bar=True)
-        self.log("train/acc", self.train_acc, prog_bar=True)
-        self.log("train/precision", self.train_precision)
-        self.log("train/recall", self.train_recall)
+        # Aggregate training metrics across all batches and emit them once at
+        # the end of the epoch rather than at ``log_every_n_steps``.
+        self.log("train/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/acc", self.train_acc, on_step=False, on_epoch=True, prog_bar=True)
+        self.log("train/precision", self.train_precision, on_step=False, on_epoch=True)
+        self.log("train/recall", self.train_recall, on_step=False, on_epoch=True)
 
         return loss
 
