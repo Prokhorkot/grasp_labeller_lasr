@@ -1,7 +1,7 @@
 checkpoint:
-  monitor: val/loss
-  mode: min
-  save_top_k: 1
+  monitor: val/acc
+  mode: max
+  save_top_k: 3
   filename: "best-{epoch:02d}"
 early_stopping:
   monitor: val/acc
