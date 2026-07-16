@@ -43,6 +43,8 @@ class GraspDataModule(L.LightningDataModule):
         split_seed: int,
         batch_size: int,
         num_workers: int,
+        audio_sequence_length: int = 224,
+        audio_frequency_bins: int = 256,
         cache_enabled: bool = False,
         cache_dir: str | Path = ".cache/grasp_iterations",
     ) -> None:
@@ -64,6 +66,8 @@ class GraspDataModule(L.LightningDataModule):
         self.split_seed = split_seed
         self.batch_size = batch_size
         self.num_workers = num_workers
+        self.audio_sequence_length = audio_sequence_length
+        self.audio_frequency_bins = audio_frequency_bins
         self.cache_enabled = cache_enabled
         self.cache_dir = Path(cache_dir)
 
@@ -104,12 +108,16 @@ class GraspDataModule(L.LightningDataModule):
             include_original=self.include_original,
             train=True,
             loader=loader,
+            audio_sequence_length=self.audio_sequence_length,
+            audio_frequency_bins=self.audio_frequency_bins,
         )
         self.val_dataset = TactileDataset(
             iteration_paths=list(val_paths),
             val_transform=val_transform,
             train=False,
             loader=loader,
+            audio_sequence_length=self.audio_sequence_length,
+            audio_frequency_bins=self.audio_frequency_bins,
         )
 
     def train_dataloader(self) -> DataLoader:

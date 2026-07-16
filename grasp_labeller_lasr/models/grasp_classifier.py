@@ -2,52 +2,86 @@ from __future__ import annotations
 
 import torch
 
-from grasp_labeller_lasr.data.dataset import IMAGES_KEY, PROPRIOCEPTORS_KEY
+from grasp_labeller_lasr.data.dataset import AUDIO_KEY, IMAGES_KEY, PROPRIOCEPTORS_KEY
+from grasp_labeller_lasr.data.loaders import DEFAULT_FINGER_NAMES
 
 
 class GraspClassifier(torch.nn.Module):
-    """Compose a grasp feature encoder with a classification head."""
+    """Fuse image, temporal-audio, and proprioceptive grasp features."""
 
     def __init__(
         self,
         encoder: torch.nn.Module,
         head: torch.nn.Module,
+        temporal_encoder: torch.nn.Module | None = None,
+        finger_names: tuple[str, ...] = DEFAULT_FINGER_NAMES,
     ) -> None:
         super().__init__()
 
         self.encoder = encoder
         self.head = head
+        self.temporal_encoder = temporal_encoder
+        self.finger_names = tuple(finger_names)
 
     def forward(self, sample: dict[str, object]) -> torch.Tensor:
         images = sample[IMAGES_KEY]
-        image_features = self.encoder(images).flatten(start_dim=1)
+        image_features = self._encode_images(images)
+        audio_features = self._encode_audio(sample, image_features)
+        proprioceptor_features = self._encode_proprioceptors(sample, image_features)
 
+        feature_groups = [image_features]
+        if audio_features is not None:
+            feature_groups.append(audio_features)
+        feature_groups.append(proprioceptor_features)
+        features = torch.cat(feature_groups, dim=1)
+        return self.head(features)
+
+    def _encode_images(self, images: dict[str, dict[str, torch.Tensor]]) -> torch.Tensor:
+        return torch.cat(
+            [self.encoder(images[finger]) for finger in self.finger_names],
+            dim=1,
+        )
+
+    def _encode_proprioceptors(
+        self,
+        sample: dict[str, object],
+        image_features: torch.Tensor,
+    ) -> torch.Tensor:
         proprioceptors = sample[PROPRIOCEPTORS_KEY]
-        proprio_commanded = torch.as_tensor(
+        commanded = torch.as_tensor(
             proprioceptors["commanded"],
             device=image_features.device,
             dtype=image_features.dtype,
         )
-        proprio_observed = torch.as_tensor(
+        observed = torch.as_tensor(
             proprioceptors["observed"],
             device=image_features.device,
             dtype=image_features.dtype,
         )
-        if proprio_commanded.shape != proprio_observed.shape:
-            raise ValueError(
-                "Commanded and observed proprioceptors must have the same shape, "
-                f"got {tuple(proprio_commanded.shape)} and "
-                f"{tuple(proprio_observed.shape)}."
-            )
-        proprio_difference = proprio_commanded - proprio_observed
-        proprio_difference = proprio_difference.flatten(start_dim=1)
+        difference = commanded - observed
+        return torch.cat(
+            [observed.flatten(start_dim=1), difference.flatten(start_dim=1)],
+            dim=1,
+        )
 
-        if proprio_difference.shape[0] != image_features.shape[0]:
-            raise ValueError(
-                "Image and proprioceptor features must have the same batch size."
-            )
-        
-        proprio_observed = proprio_observed.flatten(start_dim=1)
-
-        features = torch.cat([image_features, proprio_observed, proprio_difference], dim=1)
-        return self.head(features)
+    def _encode_audio(
+        self,
+        sample: dict[str, object],
+        image_features: torch.Tensor,
+    ) -> torch.Tensor | None:
+        if self.temporal_encoder is None:
+            return None
+        audio = sample[AUDIO_KEY]
+        sequences = torch.stack(
+            [
+                torch.as_tensor(
+                    audio[finger],
+                    device=image_features.device,
+                    dtype=image_features.dtype,
+                )
+                for finger in self.finger_names
+            ],
+            dim=1,
+        ).flatten(0, 1)
+        encoded = self.temporal_encoder(sequences)
+        return encoded.mean(dim=1).reshape(image_features.shape[0], -1)

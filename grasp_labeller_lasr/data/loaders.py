@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
-from pathlib import Path, PurePosixPath
 import tempfile
+import wave
+from pathlib import Path, PurePosixPath
 from typing import Sequence
 
 import cv2
@@ -18,6 +20,8 @@ PHASE_DATA_RELATIVE_PATH = Path("grasp/grasp_phases.csv")
 LABEL_RELATIVE_PATH = Path("grasp/grasp_label.csv")
 CAMERA_META_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/camera/camera.csv"
 FRAMES_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/camera/frames"
+AUDIO_META_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/audio/chunks.csv"
+AUDIO_WAV_RELATIVE_TEMPLATE = "opentouch/digit360/{finger}/audio/wav"
 
 PROPRIOCEPTORS_ACTIONS = Path("tilburg/tilburg_action.csv")
 PROPRIOCEPTORS_POSES = Path("tilburg/tilburg_pos.csv")
@@ -25,6 +29,7 @@ PROPRIOCEPTION_DIM = 16
 N_POSES_TO_AVERAGE = 3
 
 LIFT_PHASE = "lift"
+POST_LIFT_PHASE = "post_lift"
 
 BACKGROUND_KEY = "background"
 LIFT_START_KEY = "lift_start"
@@ -68,10 +73,80 @@ def _summarize_proprioceptors(
     return action, observed_pose
 
 
+def _read_pcm16_wav(wav_bytes: bytes, *, context: str) -> np.ndarray:
+    """Read a 16-bit PCM WAV file into its unprocessed sample array."""
+    try:
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+            channel_count = max(1, int(wav_file.getnchannels()))
+            sample_width = int(wav_file.getsampwidth())
+            frame_count = int(wav_file.getnframes())
+            raw_pcm = wav_file.readframes(frame_count)
+    except (EOFError, wave.Error) as exc:
+        raise ValueError(f"Could not decode WAV data from {context}.") from exc
+
+    if sample_width != 2:
+        raise ValueError(
+            f"Expected 16-bit PCM audio in {context}, got "
+            f"{sample_width * 8}-bit samples."
+        )
+
+    pcm = np.frombuffer(raw_pcm, dtype="<i2")
+    if pcm.size == 0:
+        raise ValueError(f"The WAV dataset is empty in {context}.")
+    if pcm.size % channel_count != 0:
+        raise ValueError(
+            f"PCM sample count {pcm.size} is not divisible by the "
+            f"channel count {channel_count} in {context}."
+        )
+
+    if channel_count > 1:
+        return pcm.reshape(-1, channel_count)
+    return pcm
+
+
+def _select_lifting_audio(
+    waveform: np.ndarray,
+    chunks: pd.DataFrame,
+    *,
+    finger: str,
+    t0: float,
+    t1: float,
+    context: str,
+) -> np.ndarray:
+    """Return the raw PCM samples belonging to the lifting time window."""
+    required_columns = ["time_perf", "start_sample", "end_sample"]
+    missing_columns = [
+        column for column in required_columns if column not in chunks.columns
+    ]
+    if missing_columns:
+        raise ValueError(f"Missing columns {missing_columns} in {context}.")
+
+    metadata = chunks[required_columns].apply(pd.to_numeric, errors="coerce")
+    metadata = metadata.replace([np.inf, -np.inf], np.nan)
+    selected = metadata.loc[
+        metadata.notna().all(axis=1)
+        & metadata["time_perf"].between(t0, t1, inclusive="both")
+    ]
+    if selected.empty:
+        raise ValueError(
+            f"No audio chunks for finger {finger!r} fall in the time window "
+            f"[{t0}, {t1}] in {context}."
+        )
+
+    start_sample = max(0, int(selected["start_sample"].min()))
+    end_sample = min(len(waveform), int(selected["end_sample"].max()))
+    if not 0 <= start_sample < end_sample <= len(waveform):
+        raise ValueError(
+            f"Invalid audio sample interval [{start_sample}, {end_sample}) "
+            f"for waveform length {len(waveform)} in {context}."
+        )
+    return waveform[start_sample:end_sample]
+
+
 class CachedIterationLoader:
     """Cache loaded iteration samples while preserving the loader interface."""
 
-    CACHE_VERSION = 2
+    CACHE_VERSION = 7
 
     def __init__(self, loader, cache_dir: str | Path) -> None:
         self.loader = loader
@@ -105,6 +180,7 @@ class CachedIterationLoader:
                 f"finger_names={getattr(self.loader, 'finger_names', None)}",
                 f"label_method={getattr(self.loader, 'label_method', None)}",
                 f"proprio_window={getattr(self.loader, 'proprio_window', None)}",
+                f"load_audio={getattr(self.loader, 'load_audio', None)}",
             ]
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -139,11 +215,13 @@ class DirectoryIterationLoader:
         finger_names: Sequence[str] = DEFAULT_FINGER_NAMES,
         label_method: str = "manual",
         proprio_window: float = 0.020,
+        load_audio: bool = True,
     ) -> None:
         self.frames_to_stack = frames_to_stack
         self.finger_names = tuple(finger_names)
         self.label_method = label_method
         self.proprio_window = proprio_window
+        self.load_audio = bool(load_audio)
 
     def load_iteration(self, iteration_path: str | Path):
         iteration_path = Path(iteration_path)
@@ -151,7 +229,18 @@ class DirectoryIterationLoader:
         lift_start_time = self._get_phase_time(phase_data, phase=LIFT_PHASE)
         label = self._read_label(iteration_path)
 
-        sample = {"images": {}, "proprioceptors": {}}
+        lift_end_time = None
+        if self.load_audio:
+            lift_end_time = self._get_phase_time(
+                phase_data,
+                phase=POST_LIFT_PHASE,
+            )
+            if lift_end_time <= lift_start_time:
+                raise ValueError(
+                    f"Phase {POST_LIFT_PHASE!r} must occur after "
+                    f"{LIFT_PHASE!r} in {iteration_path}."
+                )
+        sample = {"opentouch": {}, "proprioceptors": {}}
         for finger in self.finger_names:
             camera_meta_path = iteration_path / CAMERA_META_RELATIVE_TEMPLATE.format(
                 finger=finger
@@ -182,11 +271,22 @@ class DirectoryIterationLoader:
                 context=f"{iteration_path.name}/{finger} lift_end",
             )
 
-            sample["images"][finger] = {
-                BACKGROUND_KEY: self._load_rgb_frame(first_frame_path),
-                LIFT_START_KEY: self._average_frames(lift_start_paths),
-                LIFT_END_KEY: self._average_frames(lift_end_paths),
+            sample["opentouch"][finger] = {
+                "images": {
+                    BACKGROUND_KEY: self._load_rgb_frame(first_frame_path),
+                    LIFT_START_KEY: self._average_frames(lift_start_paths),
+                    LIFT_END_KEY: self._average_frames(lift_end_paths),
+                },
             }
+            if self.load_audio:
+                if lift_end_time is None:
+                    raise RuntimeError("Lift end time was not initialized.")
+                sample["opentouch"][finger]["audio"] = self._read_lifting_audio(
+                    iteration_path,
+                    finger=finger,
+                    t0=lift_start_time,
+                    t1=lift_end_time,
+                )
 
         action, observed_pose = self.read_proprioceptors(iteration_path)
         sample["proprioceptors"] = {"commanded": action, "observed": observed_pose}
@@ -265,6 +365,35 @@ class DirectoryIterationLoader:
             raise FileNotFoundError(path)
         return cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
+    def _read_lifting_audio(
+        self,
+        iteration_path: Path,
+        *,
+        finger: str,
+        t0: float,
+        t1: float,
+    ) -> np.ndarray:
+        chunks_path = iteration_path / AUDIO_META_RELATIVE_TEMPLATE.format(
+            finger=finger
+        )
+        wav_path = iteration_path / AUDIO_WAV_RELATIVE_TEMPLATE.format(finger=finger)
+        if not chunks_path.exists() or not wav_path.exists():
+            raise FileNotFoundError(
+                f"Missing audio data for finger {finger!r} in {iteration_path}."
+            )
+        if not wav_path.is_file():
+            raise ValueError(f"Expected WAV file at {wav_path}.")
+
+        waveform = _read_pcm16_wav(wav_path.read_bytes(), context=str(wav_path))
+        return _select_lifting_audio(
+            waveform,
+            pd.read_csv(chunks_path),
+            finger=finger,
+            t0=t0,
+            t1=t1,
+            context=str(chunks_path),
+        )
+
 
 class H5IterationLoader:
     def __init__(
@@ -273,11 +402,13 @@ class H5IterationLoader:
         finger_names: Sequence[str] = DEFAULT_FINGER_NAMES,
         label_method: str = "manual",
         proprio_window: float = 0.020,
+        load_audio: bool = True,
     ) -> None:
         self.frames_to_stack = frames_to_stack
         self.finger_names = tuple(finger_names)
         self.label_method = label_method
         self.proprio_window = proprio_window
+        self.load_audio = bool(load_audio)
 
     def load_iteration(self, iteration_path: str | Path):
         iteration_path = Path(iteration_path)
@@ -286,7 +417,19 @@ class H5IterationLoader:
             lift_start_time = self._get_phase_time(phase_data, phase=LIFT_PHASE)
             label = self._read_label(h5_file, iteration_path)
 
-            sample = {"images": {}, "proprioceptors": {}}
+            lift_end_time = None
+            if self.load_audio:
+                lift_end_time = self._get_phase_time(
+                    phase_data,
+                    phase=POST_LIFT_PHASE,
+                )
+                if lift_end_time <= lift_start_time:
+                    raise ValueError(
+                        f"Phase {POST_LIFT_PHASE!r} must occur after "
+                        f"{LIFT_PHASE!r} in {iteration_path}."
+                    )
+
+            sample = {"opentouch": {}, "proprioceptors": {}}
             for finger in self.finger_names:
                 camera_meta_key = self._h5_key(
                     iteration_path,
@@ -321,20 +464,35 @@ class H5IterationLoader:
                 )
 
                 frames_ds = h5_file[frames_key]
-                sample["images"][finger] = {
-                    BACKGROUND_KEY: self._read_encoded_frame(
-                        frames_ds,
-                        first_frame_idx,
-                    ),
-                    LIFT_START_KEY: self._average_frames(
-                        frames_ds,
-                        lift_start_indices,
-                    ),
-                    LIFT_END_KEY: self._average_frames(
-                        frames_ds,
-                        lift_end_indices,
-                    ),
+                finger_sample = {
+                    "images": {
+                        BACKGROUND_KEY: self._read_encoded_frame(
+                            frames_ds,
+                            first_frame_idx,
+                        ),
+                        LIFT_START_KEY: self._average_frames(
+                            frames_ds,
+                            lift_start_indices,
+                        ),
+                        LIFT_END_KEY: self._average_frames(
+                            frames_ds,
+                            lift_end_indices,
+                        ),
+                    },
                 }
+
+                if self.load_audio:
+                    if lift_end_time is None:
+                        raise RuntimeError("Lift end time was not initialized.")
+                    finger_sample["audio"] = self._read_lifting_audio(
+                        h5_file,
+                        iteration_path,
+                        finger=finger,
+                        t0=lift_start_time,
+                        t1=lift_end_time,
+                    )
+
+                sample["opentouch"][finger] = finger_sample
 
             action, observed_pose = self.read_proprioceptors(
                 h5_file,
@@ -346,6 +504,43 @@ class H5IterationLoader:
             }
 
         return sample, label
+
+    def _read_lifting_audio(
+        self,
+        h5_file: h5py.File,
+        iteration_path: Path,
+        *,
+        finger: str,
+        t0: float,
+        t1: float,
+    ) -> np.ndarray:
+        chunks_key = self._h5_key(
+            iteration_path,
+            AUDIO_META_RELATIVE_TEMPLATE.format(finger=finger),
+        )
+        wav_key = self._h5_key(
+            iteration_path,
+            AUDIO_WAV_RELATIVE_TEMPLATE.format(finger=finger),
+        )
+        if chunks_key not in h5_file or wav_key not in h5_file:
+            raise FileNotFoundError(
+                f"Missing audio data for finger {finger!r} in {iteration_path}."
+            )
+
+        wav_bytes = self._read_bytes_dataset(h5_file[wav_key])
+        waveform = _read_pcm16_wav(
+            wav_bytes,
+            context=f"{iteration_path}:{wav_key}",
+        )
+        chunks = self._read_table(h5_file[chunks_key])
+        return _select_lifting_audio(
+            waveform,
+            chunks,
+            finger=finger,
+            t0=t0,
+            t1=t1,
+            context=f"{iteration_path}:{chunks_key}",
+        )
 
     def read_proprioceptors(
         self,
@@ -433,6 +628,16 @@ class H5IterationLoader:
                     else value
                 )
         return df
+
+    def _read_bytes_dataset(self, h5_dataset: h5py.Dataset) -> bytes:
+        if len(h5_dataset) == 0:
+            return b""
+        raw = h5_dataset[0]
+        if isinstance(raw, np.ndarray):
+            return raw.tobytes()
+        if isinstance(raw, (bytes, bytearray)):
+            return bytes(raw)
+        return np.asarray(raw, dtype=np.uint8).tobytes()
 
     def _read_encoded_frame(
         self,

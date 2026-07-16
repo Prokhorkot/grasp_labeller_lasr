@@ -6,11 +6,7 @@ import torch
 from huggingface_hub import hf_hub_download
 from tactile_ssl.model import vit_base
 
-from grasp_labeller_lasr.data.loaders import (
-    DEFAULT_FINGER_NAMES,
-    LIFT_END_KEY,
-    LIFT_START_KEY,
-)
+from grasp_labeller_lasr.data.loaders import LIFT_END_KEY, LIFT_START_KEY
 
 
 PatchPooling = Callable[[torch.Tensor, torch.nn.Module | None], torch.Tensor]
@@ -20,54 +16,52 @@ def mean_patch_pooling(
     features: torch.Tensor,
     pooler: torch.nn.Module | None = None,
 ) -> torch.Tensor:
-    if features.ndim == 3:
+    if features.ndim == 2:
         return features
-    if features.ndim != 4:
+    if features.ndim != 3:
         raise ValueError(
-            "mean_patch_pooling expects features shaped [B, N, P, D] "
-            f"or [B, N, D], got {tuple(features.shape)}."
+            "mean_patch_pooling expects features shaped [B, P, D] "
+            f"or [B, D], got {tuple(features.shape)}."
         )
-    return features.mean(dim=2)
+    return features.mean(dim=1)
 
 
 def max_patch_pooling(
     features: torch.Tensor,
     pooler: torch.nn.Module | None = None,
 ) -> torch.Tensor:
-    if features.ndim == 3:
+    if features.ndim == 2:
         return features
-    if features.ndim != 4:
+    if features.ndim != 3:
         raise ValueError(
-            "max_patch_pooling expects features shaped [B, N, P, D] "
-            f"or [B, N, D], got {tuple(features.shape)}."
+            "max_patch_pooling expects features shaped [B, P, D] "
+            f"or [B, D], got {tuple(features.shape)}."
         )
-    return features.max(dim=2).values
+    return features.max(dim=1).values
 
 
 def attentive_patch_pooling(
     features: torch.Tensor,
     pooler: torch.nn.Module | None = None,
 ) -> torch.Tensor:
-    if features.ndim == 3:
+    if features.ndim == 2:
         return features
-    if features.ndim != 4:
+    if features.ndim != 3:
         raise ValueError(
-            "attentive_patch_pooling expects features shaped [B, N, P, D] "
-            f"or [B, N, D], got {tuple(features.shape)}."
+            "attentive_patch_pooling expects features shaped [B, P, D] "
+            f"or [B, D], got {tuple(features.shape)}."
         )
     if pooler is None:
         raise ValueError("attentive_patch_pooling requires a pooler module.")
 
-    batch_size, num_inputs, num_patches, embedding_dim = features.shape
-    features = features.reshape(batch_size * num_inputs, num_patches, embedding_dim)
     pooled = pooler(features)
     if pooled.ndim == 3 and pooled.shape[1] == 1:
         pooled = pooled.squeeze(1)
-    return pooled.reshape(batch_size, num_inputs, -1)
+    return pooled
 
 
 class SparshEncoder(torch.nn.Module):
-    """Encode the lift-start and lift-end images for each tactile finger."""
+    """Encode the lift-start and lift-end images from one tactile finger."""
 
     def __init__(
         self,
@@ -75,14 +69,12 @@ class SparshEncoder(torch.nn.Module):
         encoder_path: str,
         device: str,
         image_size: tuple[int, int] = (224, 224),
-        finger_names: tuple[str, ...] = DEFAULT_FINGER_NAMES,
         patch_pooling: PatchPooling = mean_patch_pooling,
         patch_pooler: torch.nn.Module | None = None,
     ) -> None:
         super().__init__()
 
         self.device = device
-        self.finger_names = finger_names
         self.patch_pooling = patch_pooling
         self.patch_pooler = patch_pooler
 
@@ -121,35 +113,22 @@ class SparshEncoder(torch.nn.Module):
 
     def forward(
         self,
-        images: dict[str, dict[str, torch.Tensor]],
+        images: dict[str, torch.Tensor],
     ) -> torch.Tensor:
         x = self._build_encoder_input(images)
-        batch_size, num_fingers, channels, height, width = x.shape
-
-        x = x.reshape(batch_size * num_fingers, channels, height, width)
         self.encoder.eval()
         with torch.no_grad():
             features = self.encoder(x)
-
-        features = features.reshape(
-            batch_size,
-            num_fingers,
-            *features.shape[1:],
-        )
         return self.patch_pooling(features, self.patch_pooler)
 
     def _build_encoder_input(
         self,
-        images: dict[str, dict[str, torch.Tensor]],
+        images: dict[str, torch.Tensor],
     ) -> torch.Tensor:
-        finger_inputs = []
-        for finger in self.finger_names:
-            lift_start = images[finger][LIFT_START_KEY].to(self.device)
-            lift_end = images[finger][LIFT_END_KEY].to(self.device)
-            if lift_start.ndim != 4 or lift_end.ndim != 4:
-                raise ValueError(
-                    "SparshEncoder expects batched tensors shaped [B, C, H, W]."
-                )
-            finger_inputs.append(torch.cat([lift_end, lift_start], dim=1))
-
-        return torch.stack(finger_inputs, dim=1)
+        lift_start = images[LIFT_START_KEY].to(self.device)
+        lift_end = images[LIFT_END_KEY].to(self.device)
+        if lift_start.ndim != 4 or lift_end.ndim != 4:
+            raise ValueError(
+                "SparshEncoder expects batched tensors shaped [B, C, H, W]."
+            )
+        return torch.cat([lift_end, lift_start], dim=1)

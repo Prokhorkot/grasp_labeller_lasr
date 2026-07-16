@@ -11,7 +11,7 @@ from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from lightning.pytorch.loggers import MLFlowLogger
 from omegaconf import DictConfig, OmegaConf
 
-from grasp_labeller_lasr.models.encoders import SparshEncoder
+from grasp_labeller_lasr.models.encoders import SparshEncoder, TemporalSequenceEncoder
 from grasp_labeller_lasr.models.grasp_classifier import GraspClassifier
 from grasp_labeller_lasr.models.heads import MLPClassifierHead
 from grasp_labeller_lasr.training.datamodule import GraspDataModule
@@ -79,6 +79,8 @@ def main(cfg: DictConfig) -> None:
         split_seed=cfg.data.split_seed,
         batch_size=cfg.data.batch_size,
         num_workers=cfg.data.num_workers,
+        audio_sequence_length=cfg.data.audio_sequence_length,
+        audio_frequency_bins=cfg.data.audio_frequency_bins,
         cache_enabled=cfg.data.cache_enabled,
         cache_dir=cfg.data.cache_dir,
     )
@@ -94,12 +96,20 @@ def main(cfg: DictConfig) -> None:
         encoder_path=cfg.encoder.encoder_path,
         device=cfg.encoder.device,
         image_size=tuple(cfg.encoder.image_size),
-        finger_names=tuple(cfg.data.finger_names),
         patch_pooling=patch_pooling,
         patch_pooler=patch_pooler,
     )
+    temporal_encoder = TemporalSequenceEncoder(
+        in_dim=cfg.temporal_encoder.in_dim,
+        dim=cfg.temporal_encoder.dim,
+        n_layers=cfg.temporal_encoder.n_layers,
+        n_heads=cfg.temporal_encoder.n_heads,
+        dropout=cfg.temporal_encoder.dropout,
+        max_len=cfg.temporal_encoder.max_len,
+    )
     head_input_dim = (
         len(cfg.data.finger_names) * encoder.embedding_dim
+        + len(cfg.data.finger_names) * temporal_encoder.dim
         + 2 * datamodule.proprioception_dim
     )
     head = MLPClassifierHead(
@@ -108,7 +118,12 @@ def main(cfg: DictConfig) -> None:
         dropout=cfg.head.dropout,
         output_dim=cfg.head.output_dim,
     )
-    model = GraspClassifier(encoder=encoder, head=head).to(cfg.encoder.device)
+    model = GraspClassifier(
+        encoder=encoder,
+        temporal_encoder=temporal_encoder,
+        head=head,
+        finger_names=tuple(cfg.data.finger_names),
+    ).to(cfg.encoder.device)
 
     lit_model = GraspLitModule(
         model=model,
@@ -139,6 +154,7 @@ def main(cfg: DictConfig) -> None:
             tracking_uri = None
         tags = _build_mlflow_tags(cfg)
         tags["embedding_dim"] = str(encoder.embedding_dim)
+        tags["audio_embedding_dim"] = str(temporal_encoder.dim)
         tags["num_inputs"] = str(len(cfg.data.finger_names))
         tags["proprioception_dim"] = str(datamodule.proprioception_dim)
         tags["head_input_dim"] = str(head_input_dim)
