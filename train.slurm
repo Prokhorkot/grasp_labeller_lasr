@@ -11,6 +11,9 @@
 
 set -euo pipefail
 
+module purge
+module load release/24.04 GCCcore/13.3.0 Python/3.12.3
+
 cd "${SLURM_SUBMIT_DIR:?Submit this script with sbatch}"
 
 VENV_PYTHON="${SLURM_SUBMIT_DIR}/.venv/bin/python"
