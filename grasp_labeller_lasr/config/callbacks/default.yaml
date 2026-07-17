@@ -6,7 +6,7 @@ checkpoint:
 early_stopping:
   monitor: val/acc
   mode: max
-  patience: 20
+  patience: 10
 learning_rate_monitor:
   enabled: true
   callback:

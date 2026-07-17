@@ -105,7 +105,10 @@ class TactileDataset(Dataset):
 
         iteration_path = self.iteration_paths[real_index]["path"]
         sample, label = self.loader.load_iteration(iteration_path)
-        sample = self._prepare_opentouch(sample)
+        augment_audio = self.train and not (
+            self.include_original and copy_index == 0
+        )
+        sample = self._prepare_opentouch(sample, augment_audio=augment_audio)
         transform = self._select_transform(copy_index)
         if transform is not None:
             sample[IMAGES_KEY] = transform(sample[IMAGES_KEY])
@@ -121,7 +124,11 @@ class TactileDataset(Dataset):
 
         return self.train_transform
 
-    def _prepare_opentouch(self, sample: dict[str, Any]) -> dict[str, Any]:
+    def _prepare_opentouch(
+        self,
+        sample: dict[str, Any],
+        augment_audio: bool = False,
+    ) -> dict[str, Any]:
         """Normalize a loader's per-finger tactile data into the dataset schema."""
         try:
             opentouch = sample.pop(OPENTOUCH_KEY)
@@ -140,14 +147,21 @@ class TactileDataset(Dataset):
 
             raw_audio = finger_sample.get(AUDIO_KEY)
             if raw_audio is not None:
-                audio[finger] = self._log_stft_features(raw_audio)
+                audio[finger] = self._log_stft_features(
+                    raw_audio,
+                    augment=augment_audio,
+                )
 
         sample[IMAGES_KEY] = images
         if audio:
             sample[AUDIO_KEY] = audio
         return sample
 
-    def _log_stft_features(self, raw_waveform: np.ndarray) -> np.ndarray:
+    def _log_stft_features(
+        self,
+        raw_waveform: np.ndarray,
+        augment: bool = False,
+    ) -> np.ndarray:
         """Normalize a raw PCM waveform and compute [time, frequency] features."""
         waveform = np.asarray(raw_waveform)
         if waveform.size == 0:
@@ -186,4 +200,34 @@ class TactileDataset(Dataset):
         )[0, 0]
         features = resized.transpose(0, 1)
         features = (features - features.mean()) / features.std().clamp_min(1e-6)
+        if augment:
+            features = self._augment_audio_features(features)
         return features.cpu().numpy().astype(np.float32)
+
+    @staticmethod
+    def _augment_audio_features(features: torch.Tensor) -> torch.Tensor:
+        features = features.clone()
+        time_steps, frequency_bins = features.shape
+
+        time_width = torch.randint(0, max(2, time_steps // 10), ()).item()
+        if time_width:
+            start = torch.randint(0, time_steps - time_width + 1, ()).item()
+            features[start : start + time_width] = 0
+
+        frequency_width = torch.randint(
+            0,
+            max(2, frequency_bins // 10),
+            (),
+        ).item()
+        if frequency_width:
+            start = torch.randint(
+                0,
+                frequency_bins - frequency_width + 1,
+                (),
+            ).item()
+            features[:, start : start + frequency_width] = 0
+
+        if torch.rand(()) < 0.5:
+            features += 0.03 * torch.randn_like(features)
+
+        return features
