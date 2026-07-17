@@ -17,7 +17,7 @@ val_ratio: 0.3
 split_seed: 42
 batch_size: 32
 num_workers: 8
-audio_sequence_length: 224
+audio_sequence_length: 112
 audio_frequency_bins: 256
 cache_enabled: true
 cache_dir: .cache/grasp_iterations
